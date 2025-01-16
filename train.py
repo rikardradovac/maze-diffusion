@@ -9,6 +9,8 @@ from models import InnerModelConfig, DenoiserConfig, SigmaDistributionConfig, De
 from data import SequenceMazeDataset, collate_maze_sequences
 import pandas as pd
 import argparse
+from torch.amp import autocast
+from torch.cuda.amp import GradScaler
 
 def get_lr_lambda(current_step: int, warmup_steps: int):
     if current_step < warmup_steps:
@@ -21,14 +23,16 @@ def setup_distributed():
     if not torch.cuda.is_available():
         return False, 0, 1
         
-    world_size = int(os.environ.get("WORLD_SIZE", 1))
-    if world_size <= 1:
+    # Check if we're running under torchrun/torch.distributed.launch
+    if "LOCAL_RANK" not in os.environ:
         return False, 0, 1
 
     # Initialize distributed process group
-    torch.distributed.init_process_group(backend="nccl")
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    
     torch.cuda.set_device(local_rank)
+    torch.distributed.init_process_group(backend="nccl")
     
     return True, local_rank, world_size
 
@@ -39,7 +43,7 @@ def get_device(args):
     return f"cuda:{args.local_rank}" if args.distributed else "cuda:0"
 
 def train_one_epoch(model, train_loader, optimizer, scheduler, device, 
-                   gradient_accumulation_steps, max_grad_norm, is_main_process):
+                   gradient_accumulation_steps, max_grad_norm, is_main_process, scaler):
     model.train()
     total_loss = 0
     num_batches = 0
@@ -48,23 +52,28 @@ def train_one_epoch(model, train_loader, optimizer, scheduler, device,
     running_loss = 0.0
     
     for step, batch in enumerate(progress_bar):
-        # batch is already a Batch object, just move it to device
         batch = batch.to(device)
         
-        # Compute loss
-        loss, _ = model(batch)
-        loss = loss / gradient_accumulation_steps
-        loss.backward()
+        # Use autocast for mixed precision training
+        with autocast(device_type="cuda"):
+            loss, _ = model(batch)
+            loss = loss / gradient_accumulation_steps
 
+        # Scale loss and call backward
+        scaler.scale(loss).backward()
         running_loss += loss.item() * gradient_accumulation_steps
         
         if (step + 1) % gradient_accumulation_steps == 0:
+            # Unscale gradients and clip
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-            optimizer.step()
+            
+            # Step optimizer and scaler
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad()
             scheduler.step()
             
-            # Update progress bar
             progress_bar.set_postfix({
                 'loss': f'{running_loss/gradient_accumulation_steps:.4f}',
                 'lr': f'{scheduler.get_last_lr()[0]:.6f}'
@@ -84,9 +93,8 @@ def validate(model, val_loader, device):
     
     progress_bar = tqdm(val_loader, desc=f"Validating", leave=False)
     
-    with torch.no_grad():
+    with torch.no_grad(), autocast(device_type="cuda"):  # Also use autocast for validation
         for batch in progress_bar:
-            # batch is already a Batch object, just move it to device
             batch = batch.to(device)
             loss, _ = model(batch)
             total_loss += loss.item()
@@ -102,7 +110,7 @@ def parse_args():
     
     # Training infrastructure arguments
     parser.add_argument('--cpu', action='store_true', help='Force CPU training')
-    parser.add_argument('--batch-size', type=int, default=8, help='Batch size per GPU')
+    parser.add_argument('--batch_size', type=int, default=8, help='Batch size per GPU')
     parser.add_argument('--distributed', action='store_true', help='Enable distributed training (multi-GPU)')
     parser.add_argument('--local_rank', type=int, default=0, help='Local rank for distributed training')
     parser.add_argument('--num-workers', type=int, default=4, help='Number of data loading workers')
@@ -153,19 +161,22 @@ def parse_args():
 def main():
     args = parse_args()
     
-    # Setup distributed training if requested and available
-    is_distributed, local_rank, world_size = setup_distributed() if args.distributed else (False, 0, 1)
+    # Setup distributed training
+    is_distributed, local_rank, world_size = setup_distributed()
     args.distributed = is_distributed
     args.local_rank = local_rank
     
     # Set device
     device = get_device(args)
     is_main_process = (not is_distributed) or (local_rank == 0)
-
+    
     if is_main_process:
         print(f"Training on: {device}")
         if is_distributed:
             print(f"Distributed training with {world_size} GPUs")
+            
+    # Initialize gradient scaler for mixed precision training
+    scaler = GradScaler()
     
     # Data loading
     train_df = pd.read_parquet(args.train_data)
@@ -264,7 +275,8 @@ def main():
             
             train_loss = train_one_epoch(
                 denoiser, train_loader, optimizer, scheduler,
-                device, args.gradient_accumulation_steps, args.max_grad_norm, is_main_process
+                device, args.gradient_accumulation_steps, args.max_grad_norm, 
+                is_main_process, scaler
             )
             
             val_loss = validate(denoiser, val_loader, device)

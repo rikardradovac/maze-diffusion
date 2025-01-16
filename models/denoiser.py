@@ -88,33 +88,42 @@ class Denoiser(nn.Module):
         total_valid = 0
         
         for i in range(seq_length):
-            if not sequence_mask[:, n+i].any():
+            # Only process valid sequences
+            valid_mask = sequence_mask[:, n+i]
+            if not valid_mask.any():
                 continue
-                
-            # Process all sequences in parallel
-            prev_obs = all_obs[:, i:i+n].reshape(b, n * c, H, W)
-            obs = all_obs[:, n + i]
+            
+            # Index only valid sequences
+            valid_obs = all_obs[valid_mask]
+            valid_size = valid_mask.sum()
+
+            prev_obs = valid_obs[:, i:i+n].reshape(valid_size, n * c, H, W)
+            obs = valid_obs[:, n + i]
 
             if self.cfg.noise_previous_obs:
-                sigma_cond = self.sample_sigma_training(b, self.device)
+                sigma_cond = self.sample_sigma_training(valid_size, self.device)
                 prev_obs = self.apply_noise(prev_obs, sigma_cond, self.cfg.sigma_offset_noise)
             else:
                 sigma_cond = None
 
-            sigma = self.sample_sigma_training(b, self.device)
+            if self.is_upsampler:
+                valid_low_res = low_res[valid_mask]
+                prev_obs = torch.cat((prev_obs, valid_low_res[:, n + i]), dim=1)
+
+            sigma = self.sample_sigma_training(valid_size, self.device)
             noisy_obs = self.apply_noise(obs, sigma, self.cfg.sigma_offset_noise)
             
             cs = self.compute_conditioners(sigma, sigma_cond)
             model_output = self.compute_model_output(noisy_obs, prev_obs, cs)
             
             target = (obs - cs.c_skip * noisy_obs) / cs.c_out
+            loss += F.mse_loss(model_output, target) * valid_size
             
-            # Apply mask to loss computation
-            batch_loss = F.mse_loss(model_output, target, reduction='none')
-            batch_loss = batch_loss.mean(dim=[1,2,3])  # Average over C,H,W dimensions
-            valid_mask = sequence_mask[:, n+i]
-            loss += (batch_loss * valid_mask).sum()
-            total_valid += valid_mask.sum()
+            denoised = self.wrap_model_output(noisy_obs, model_output, cs)
+            valid_obs[:, n + i] = denoised
+            all_obs[valid_mask] = valid_obs
+            
+            total_valid += valid_size
 
         # Normalize loss by total number of valid sequences processed
         loss = loss / total_valid if total_valid > 0 else loss
