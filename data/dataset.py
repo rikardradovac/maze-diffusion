@@ -58,7 +58,7 @@ class MazeDataset(Dataset):
     
     
 class SequenceMazeDataset(Dataset):
-    def __init__(self, dataframe, transform=None, max_frames: int = 64):
+    def __init__(self, dataframe, transform=None, max_frames: int = 100):
         """
         Args:
             dataframe: Pandas dataframe containing maze data
@@ -118,7 +118,7 @@ class SequenceMazeDataset(Dataset):
             
             # Convert action to one-hot encoding
             action = torch.zeros(4)  # One-hot vector for 4 possible actions
-            if row['action'] is not None:  # Skip for last frame
+            if row['action'] is not None and row['action'] != "START":  # Skip for last frame
                 action_map = {'UP': 0, 'DOWN': 1, 'LEFT': 2, 'RIGHT': 3}
                 action[action_map[row['action']]] = 1
             actions.append(action)
