@@ -14,15 +14,6 @@ class InnerModel(nn.Module):
         super().__init__()
         self.noise_emb = FourierFeatures(cfg.cond_channels)
         self.noise_cond_emb = FourierFeatures(cfg.cond_channels)
-        self.act_emb = nn.Sequential(
-            nn.Embedding(
-            cfg.num_actions,  # 4 for UP, DOWN, LEFT, RIGHT
-            cfg.cond_channels // cfg.num_steps_conditioning
-            ),
-            nn.Flatten()
-        )
-
-        nn.init.orthogonal_(self.act_emb[0].weight, gain=1.0)
 
         self.cond_proj = nn.Sequential(
             nn.Linear(cfg.cond_channels, cfg.cond_channels),
@@ -41,19 +32,11 @@ class InnerModel(nn.Module):
         nn.init.zeros_(self.conv_out.weight)
 
     def forward(self, noisy_next_obs: Tensor, c_noise: Tensor, c_noise_cond: Tensor, 
-                obs: Tensor, act: Optional[Tensor]) -> Tensor:
-        if self.act_emb is not None and act is not None:
-            # Convert one-hot to indices
-            act_indices = torch.argmax(act, dim=-1)
-            act_emb = self.act_emb(act_indices)
-        else:
-            assert act is None
-            act_emb = 0
-
+                obs: Tensor) -> Tensor:
+        
         cond = self.cond_proj(
             self.noise_emb(c_noise) + 
-            self.noise_cond_emb(c_noise_cond) + 
-            act_emb
+            self.noise_cond_emb(c_noise_cond)
         )
         x = self.conv_in(torch.cat((obs, noisy_next_obs), dim=1))
         x, _, _ = self.unet(x, cond)

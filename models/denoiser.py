@@ -45,10 +45,10 @@ class Denoiser(nn.Module):
         c_noise_cond = sigma_cond.log() / 4 if sigma_cond is not None else torch.zeros_like(c_noise)
         return Conditioners(*(add_dims(c, n) for c, n in zip((c_in, c_out, c_skip, c_noise, c_noise_cond), (4, 4, 4, 1, 1))))
 
-    def compute_model_output(self, noisy_next_obs: Tensor, obs: Tensor, act: Optional[Tensor], cs: Conditioners) -> Tensor:
+    def compute_model_output(self, noisy_next_obs: Tensor, obs: Tensor, cs: Conditioners) -> Tensor:
         rescaled_obs = obs / self.cfg.sigma_data
         rescaled_noise = noisy_next_obs * cs.c_in
-        return self.inner_model(rescaled_noise, cs.c_noise, cs.c_noise_cond, rescaled_obs, act)
+        return self.inner_model(rescaled_noise, cs.c_noise, cs.c_noise_cond, rescaled_obs)
 
     @torch.no_grad()
     def wrap_model_output(self, noisy_next_obs: Tensor, model_output: Tensor, cs: Conditioners) -> Tensor:
@@ -93,7 +93,6 @@ class Denoiser(nn.Module):
                 
             # Process all sequences in parallel
             prev_obs = all_obs[:, i:i+n].reshape(b, n * c, H, W)
-            prev_act = None if self.is_upsampler else batch.act[:, i:n+i]
             obs = all_obs[:, n + i]
 
             if self.cfg.noise_previous_obs:
@@ -106,7 +105,7 @@ class Denoiser(nn.Module):
             noisy_obs = self.apply_noise(obs, sigma, self.cfg.sigma_offset_noise)
             
             cs = self.compute_conditioners(sigma, sigma_cond)
-            model_output = self.compute_model_output(noisy_obs, prev_obs, prev_act, cs)
+            model_output = self.compute_model_output(noisy_obs, prev_obs, cs)
             
             target = (obs - cs.c_skip * noisy_obs) / cs.c_out
             

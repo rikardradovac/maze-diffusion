@@ -155,12 +155,10 @@ def collate_maze_sequences(batch):
     """
     # Stack all sequences in batch
     maze_sequences = torch.stack([item['maze_sequence'] for item in batch])
-    action_sequences = torch.stack([item['actions'] for item in batch])
     masks = torch.stack([item['mask'] for item in batch])
     
     return Batch(
-        obs=maze_sequences,          # Shape: [B, T, C, H, W]
-        act=action_sequences,        # Shape: [B, T, 4]
+        obs=maze_sequences,          # Shape: [B, T, C, H, W]      
         mask=masks,                  # Shape: [B, T]
         info=None,
         segment_ids=None

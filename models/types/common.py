@@ -29,7 +29,6 @@ class Segment:
 @dataclass
 class Batch:
     obs: torch.ByteTensor
-    act: torch.LongTensor
     rew: Optional[torch.FloatTensor] = None
     end: Optional[torch.LongTensor] = None
     trunc: Optional[torch.LongTensor] = None
@@ -50,7 +49,6 @@ class Batch:
         """
         return Batch(
             obs=self.obs[indices] if self.obs is not None else None,
-            act=self.act[indices] if self.act is not None else None,
             rew=self.rew[indices] if self.rew is not None else None,
             end=self.end[indices] if self.end is not None else None,
             trunc=self.trunc[indices] if self.trunc is not None else None,
@@ -81,7 +79,6 @@ class Batch:
     def pin_memory(self) -> 'Batch':
         return Batch(
             obs=self.obs.pin_memory() if self.obs is not None else None,
-            act=self.act.pin_memory() if self.act is not None else None,
             rew=self.rew.pin_memory() if self.rew is not None else None,
             end=self.end.pin_memory() if self.end is not None else None,
             mask=self.mask.pin_memory() if self.mask is not None else None,
@@ -93,7 +90,6 @@ class Batch:
     def to(self, device: torch.device) -> 'Batch':
         return Batch(
             obs=self.obs.to(device) if self.obs is not None else None,
-            act=self.act.to(device) if self.act is not None else None,
             rew=self.rew.to(device) if self.rew is not None else None,
             end=self.end.to(device) if self.end is not None else None,
             mask=self.mask.to(device) if self.mask is not None else None,
