@@ -6,7 +6,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader
 from models import InnerModelConfig, DenoiserConfig, SigmaDistributionConfig, Batch, Denoiser
-from data import SequenceMazeDataset
+from data import SequenceMazeDataset, collate_maze_sequences
 import pandas as pd
 # Initialize DDP
 torch.distributed.init_process_group(backend="nccl")
@@ -36,8 +36,11 @@ def train_one_epoch(model, train_loader, optimizer, scheduler, device, gradient_
     running_loss = 0.0
     
     for step, batch in enumerate(progress_bar):
+        # batch is already a Batch object, just move it to device
+        batch = batch.to(device)
+        
         # Compute loss
-        loss, _ = model(Batch(obs=batch["maze_sequence"], act=batch["actions"]).to(device))
+        loss, _ = model(batch)
         loss = loss / gradient_accumulation_steps
         loss.backward()
 
@@ -71,7 +74,9 @@ def validate(model, val_loader, device):
     
     with torch.no_grad():
         for batch in progress_bar:
-            loss, _ = model(Batch(obs=batch["maze_sequence"], act=batch["actions"]).to(device))
+            # batch is already a Batch object, just move it to device
+            batch = batch.to(device)
+            loss, _ = model(batch)
             total_loss += loss.item()
             num_batches += 1
             
@@ -91,11 +96,18 @@ def main():
     train_sampler = DistributedSampler(train_dataset, shuffle=True)
     val_sampler = DistributedSampler(val_dataset, shuffle=False)
     
-    train_loader = DataLoader(train_dataset, sampler=train_sampler, batch_size=8)
-    val_loader = DataLoader(val_dataset, sampler=val_sampler, batch_size=8)
-
-
-
+    train_loader = DataLoader(
+        train_dataset, 
+        sampler=train_sampler, 
+        batch_size=8,
+        collate_fn=collate_maze_sequences  # Add custom collate function
+    )
+    val_loader = DataLoader(
+        val_dataset, 
+        sampler=val_sampler, 
+        batch_size=8,
+        collate_fn=collate_maze_sequences  # Add custom collate function
+    )
 
     inner_model_cfg = InnerModelConfig(
         img_channels=3,
@@ -120,7 +132,7 @@ def main():
         loc=-0.3,
         scale=1,
         sigma_min=5e-3,
-        sigma_max=3.0,
+        sigma_max=5.0,
     )
     # Model initialization
     denoiser = Denoiser(denoiser_cfg)

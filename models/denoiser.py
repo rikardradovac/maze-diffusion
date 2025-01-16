@@ -70,6 +70,9 @@ class Denoiser(nn.Module):
         n = self.cfg.inner_model.num_steps_conditioning
         seq_length = t - n
 
+        # Get mask for valid sequences
+        sequence_mask = batch.mask if batch.mask is not None else torch.ones(b, dtype=torch.bool, device=self.device)
+
         if self.is_upsampler:
             all_obs = torch.stack([x["full_res"] for x in batch.info]).to(self.device)
             low_res = F.interpolate(
@@ -82,31 +85,47 @@ class Denoiser(nn.Module):
             all_obs = batch.obs.clone()
 
         loss = 0
+        total_valid = 0
+        
         for i in range(seq_length):
-            prev_obs = all_obs[:, i : n + i].reshape(b, n * c, H, W)
-            prev_act = None if self.is_upsampler else batch.act[:, i : n + i]
-            obs = all_obs[:, n + i]
+            # Only process valid sequences
+            valid_mask = sequence_mask
+            if not valid_mask.any():
+                continue
+                
+            # Index only valid sequences
+            valid_obs = all_obs[valid_mask]
+            valid_size = valid_mask.sum()
+
+            prev_obs = valid_obs[:, i : n + i].reshape(valid_size, n * c, H, W)
+            prev_act = None if self.is_upsampler else batch.act[valid_mask][:, i : n + i]
+            obs = valid_obs[:, n + i]
 
             if self.cfg.noise_previous_obs:
-                sigma_cond = self.sample_sigma_training(b, self.device)
+                sigma_cond = self.sample_sigma_training(valid_size, self.device)
                 prev_obs = self.apply_noise(prev_obs, sigma_cond, self.cfg.sigma_offset_noise)
             else:
                 sigma_cond = None
 
             if self.is_upsampler:
-                prev_obs = torch.cat((prev_obs, low_res[:, n + i]), dim=1)
+                valid_low_res = low_res[valid_mask]
+                prev_obs = torch.cat((prev_obs, valid_low_res[:, n + i]), dim=1)
 
-            sigma = self.sample_sigma_training(b, self.device)
+            sigma = self.sample_sigma_training(valid_size, self.device)
             noisy_obs = self.apply_noise(obs, sigma, self.cfg.sigma_offset_noise)
 
             cs = self.compute_conditioners(sigma, sigma_cond)
             model_output = self.compute_model_output(noisy_obs, prev_obs, prev_act, cs)
 
             target = (obs - cs.c_skip * noisy_obs) / cs.c_out
-            loss += F.mse_loss(model_output, target)
+            loss += F.mse_loss(model_output, target) * valid_size
 
             denoised = self.wrap_model_output(noisy_obs, model_output, cs)
-            all_obs[:, n + i] = denoised
+            valid_obs[:, n + i] = denoised
+            all_obs[valid_mask] = valid_obs
+            
+            total_valid += valid_size
 
-        loss /= seq_length
+        # Normalize loss by total number of valid sequences processed
+        loss = loss / total_valid if total_valid > 0 else loss
         return loss, {"loss_denoising": loss.item()} 

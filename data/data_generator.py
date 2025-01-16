@@ -61,7 +61,7 @@ class DataGenerator:
                     
                     # Add row to dataframe
                     new_row = pd.DataFrame({
-                        'current_maze': [current_filename],
+                        'frame': [current_filename],
                         'action': [action]
                     })
                     df = pd.concat([df, new_row], ignore_index=True)

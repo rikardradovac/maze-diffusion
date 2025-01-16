@@ -1,11 +1,10 @@
-
 import pandas as pd
 import os
 import torch
 from torch.utils.data import Dataset
 from PIL import Image
 import torchvision.transforms as transforms
-
+from models.types.common import Batch
 
 
 
@@ -59,7 +58,7 @@ class MazeDataset(Dataset):
     
     
 class SequenceMazeDataset(Dataset):
-    def __init__(self, dataframe, transform=None, max_frames: int = 32):
+    def __init__(self, dataframe, transform=None, max_frames: int = 64):
         """
         Args:
             dataframe: Pandas dataframe containing maze data
@@ -136,11 +135,33 @@ class SequenceMazeDataset(Dataset):
         maze_sequence = torch.stack(maze_frames)      # Shape: [max_frames, C, H, W]
         action_sequence = torch.stack(actions)        # Shape: [max_frames, 4]
         
+        # Create mask based on sequence_length
+        mask = torch.zeros(self.max_frames, dtype=torch.bool)
+        mask[:sequence_length] = True
+        
         return {
             'maze_sequence': maze_sequence,           # Shape: [max_frames, C, H, W]
             'actions': action_sequence,               # Shape: [max_frames, 4]
-            'sequence_length': sequence_length        # Original sequence length before padding
+            'sequence_length': sequence_length,       # Original sequence length before padding
+            'mask': mask                             # Shape: [max_frames]
         }
     
     def __repr__(self):
         return f"SequenceMazeDataset(num_sequences={len(self.sequences)})"
+
+def collate_maze_sequences(batch):
+    """
+    Custom collate function for maze sequences.
+    """
+    # Stack all sequences in batch
+    maze_sequences = torch.stack([item['maze_sequence'] for item in batch])
+    action_sequences = torch.stack([item['actions'] for item in batch])
+    masks = torch.stack([item['mask'] for item in batch])
+    
+    return Batch(
+        obs=maze_sequences,          # Shape: [B, T, C, H, W]
+        act=action_sequences,        # Shape: [B, T, 4]
+        mask=masks,                  # Shape: [B, T]
+        info=None,
+        segment_ids=None
+    )
