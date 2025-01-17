@@ -14,6 +14,9 @@ class Maze:
 
     def generate(self):
         """Generate a new maze with given dimensions."""
+        # Set a new random seed for each maze generation
+        np.random.seed(None)  # Reset numpy's random seed
+        
         # Ensure odd dimensions
         self.grid = np.ones((self.height, self.width), dtype=np.uint8)
         self._carve_path(1, 1)
