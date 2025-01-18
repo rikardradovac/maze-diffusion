@@ -8,6 +8,7 @@ from models.types.common import Batch
 
 
 
+
 class MazeDataset(Dataset):
     def __init__(self, dataframe, transform=None):
         """

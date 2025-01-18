@@ -116,3 +116,28 @@ class Maze:
         """Print ASCII representation of the maze."""
         for row in self.grid:
             print(''.join(['█' if cell == 1 else ' ' for cell in row]))
+
+    def create_maze_frame(self, highlight_cells=None, target_size=(32, 32), entrances=None):
+        """Create a maze frame with specified cells highlighted in red, returning the image buffer."""
+        # Create initial array
+        img_array = np.zeros((self.grid.shape[0], self.grid.shape[1], 3), dtype=np.uint8)
+        img_array[self.grid == 1] = [0, 0, 0]      # walls = black
+        img_array[self.grid == 0] = [255, 255, 255] # paths = white
+        
+        # Make entrance positions white
+        if entrances:
+            for entrance in entrances:
+                y, x = entrance.y, entrance.x
+                img_array[y, x] = [255, 255, 255]  # entrances = white
+        
+        # Highlight specified cells in red
+        if highlight_cells:
+            for cell in highlight_cells:
+                y, x = cell['y'], cell['x']
+                img_array[y, x] = [255, 0, 0]  # highlight = red
+        
+        # Create and resize image
+        img = Image.fromarray(img_array)
+        img_resized = img.resize(target_size, Image.NEAREST)
+        
+        return img_resized

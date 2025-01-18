@@ -1,7 +1,7 @@
-from .dataset import MazeDataset, SequenceMazeDataset
 from .maze import Maze
 from .solver import Solver
-from .dataset import collate_maze_sequences
+from .dataset import MazeDataset, SequenceMazeDataset, collate_maze_sequences
+
 __all__ = [
     'Maze',
     'MazeDataset',
