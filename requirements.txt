@@ -1,0 +1,14 @@
+fastapi==0.109.1
+uvicorn==0.27.1
+numpy==1.26.4
+torch==2.5.1
+Pillow==10.2.0
+pydantic==2.6.1
+python-multipart==0.0.9
+onnxruntime==1.17.0 
+pandas==2.2.3
+tqdm==4.67.1
+pyarrow==19.0.0
+fastparquet==2024.11.0
+matplotlib==3.10.0
+
