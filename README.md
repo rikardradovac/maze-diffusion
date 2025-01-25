@@ -1,5 +1,7 @@
 # Maze Navigation with Diffusion Models
 
+![Demo](assets/maze.gif)
+
 An approach to maze solving using conditional denoising diffusion models. This project demonstrates how modern generative AI can be applied to sequential decision-making tasks by learning to "imagine" paths through mazes frame by frame.
 
 ## Overview
