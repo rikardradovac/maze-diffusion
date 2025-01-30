@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional
 
 from .types.common import DenoiserConfig, SigmaDistributionConfig, Batch, Conditioners, LossAndLogs
 from .inner_model import InnerModel
@@ -13,8 +13,6 @@ class Denoiser(nn.Module):
     def __init__(self, cfg: DenoiserConfig) -> None:
         super().__init__()
         self.cfg = cfg
-        self.is_upsampler = cfg.upsampling_factor is not None
-        cfg.inner_model.is_upsampler = self.is_upsampler
         self.inner_model = InnerModel(cfg.inner_model)
         self.sample_sigma_training = None
 
