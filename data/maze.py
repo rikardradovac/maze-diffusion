@@ -1,5 +1,5 @@
 import numpy as np
-from random import choice, randint
+from random import choice, randint, sample
 from PIL import Image
 
 class Maze:
@@ -12,29 +12,40 @@ class Maze:
         self.grid = np.ones((height, width), dtype=np.uint8)
 
 
-    def generate(self):
-        """Generate a new maze with given dimensions."""
+    def generate(self, random_start=True):
+        """Generate a new maze with given dimensions.
+        
+        Parameters:
+            random_start (bool): If True, start carving from a random odd cell.
+                                 Otherwise, start at (1, 1).
+        """
         # Set a new random seed for each maze generation
         np.random.seed(None)  # Reset numpy's random seed
         
         # Ensure odd dimensions
         self.grid = np.ones((self.height, self.width), dtype=np.uint8)
-        self._carve_path(1, 1)
+        
+        if random_start:
+            # Choose a random starting cell among odd indices (1,3,5,...)
+            possible_x = list(range(1, self.width, 2))
+            possible_y = list(range(1, self.height, 2))
+            start_x = choice(possible_x)
+            start_y = choice(possible_y)
+        else:
+            start_x, start_y = 1, 1
+        
+        self._carve_path(start_x, start_y)
         self._create_random_openings()
     
     def _create_random_openings(self):
-        """Create entrance and exit on random but opposite sides of the maze."""
+        """Create two openings (entrance and exit) on two random sides of the maze.
+        
+        This method now selects two distinct sides from ['top', 'bottom', 'left', 'right'],
+        meaning that the entrance/exit can be either opposite or adjacent.
+        """
         sides = ['top', 'bottom', 'left', 'right']
-        entrance_side = choice(sides)
-        
-        opposite_sides = {
-            'top': 'bottom',
-            'bottom': 'top',
-            'left': 'right',
-            'right': 'left'
-        }
-        exit_side = opposite_sides[entrance_side]
-        
+        entrance_side, exit_side = sample(sides, 2)  # randomly choose two distinct sides
+
         self._create_opening(entrance_side)
         self._create_opening(exit_side)
     

@@ -6,7 +6,7 @@ from typing import List
 from dataclasses import dataclass
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
-from models import Denoiser, DenoiserConfig, InnerModelConfig
+from models import Denoiser, DenoiserConfig, ConditionedUNetConfig
 import numpy as np
 import onnxruntime
 
@@ -85,23 +85,21 @@ class MazeGeneratorPyTorch(BaseMazeGenerator):
 
     def _initialize_model(self, checkpoint_path: str) -> Denoiser:
         """Initialize the denoiser model with configurations."""
-        inner_model_cfg = InnerModelConfig(
+        conditioned_unet_cfg = ConditionedUNetConfig(
             img_channels=3,
-            num_steps_conditioning=2,
+            num_conditioning_steps=2,
             cond_channels=256,
             depths=[2, 2, 2, 2],
             channels=[64, 64, 64, 64],
             attn_depths=[False, False, False, False],
             num_actions=4,
-            is_upsampler=False
         )
 
         denoiser_cfg = DenoiserConfig(
-            inner_model=inner_model_cfg,
+            conditioned_unet=conditioned_unet_cfg,
             sigma_data=0.5,
             sigma_offset_noise=0.3,
             noise_previous_obs=True,
-            upsampling_factor=None
         )
 
         denoiser = Denoiser(denoiser_cfg)

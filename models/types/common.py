@@ -137,20 +137,18 @@ class SigmaDistributionConfig:
     sigma_max: float
 
 @dataclass
-class InnerModelConfig:
+class ConditionedUNetConfig:
     img_channels: int
-    num_steps_conditioning: int
+    num_conditioning_steps: int
     cond_channels: int
     depths: List[int]
     channels: List[int]
     attn_depths: List[bool]
     num_actions: Optional[int] = None
-    is_upsampler: Optional[bool] = None
 
 @dataclass
 class DenoiserConfig:
-    inner_model: InnerModelConfig
+    conditioned_unet: ConditionedUNetConfig
     sigma_data: float
     sigma_offset_noise: float
     noise_previous_obs: bool
-    upsampling_factor: Optional[int] = None

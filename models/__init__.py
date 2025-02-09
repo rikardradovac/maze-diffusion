@@ -1,7 +1,7 @@
 from .denoiser import Denoiser
 from .types.common import (
     DenoiserConfig, 
-    InnerModelConfig, 
+    ConditionedUNetConfig, 
     SigmaDistributionConfig,
     Batch, 
     Segment, 
@@ -11,7 +11,7 @@ from .types.common import (
 __all__ = [
     'Denoiser',
     'DenoiserConfig',
-    'InnerModelConfig',
+    'ConditionedUNetConfig',
     'SigmaDistributionConfig',
     'Batch',
     'Segment',

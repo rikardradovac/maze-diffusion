@@ -3,14 +3,14 @@ import torch.nn.functional as F
 from torch import nn, Tensor
 from typing import Optional
 
-from .types.common import InnerModelConfig
+from .types.common import ConditionedUNetConfig
 from .layers.fourier import FourierFeatures
 from .layers.conv import Conv3x3
 from .layers.norm import GroupNorm
 from .unet import UNet
 
-class InnerModel(nn.Module):
-    def __init__(self, cfg: InnerModelConfig) -> None:
+class ConditionedUNet(nn.Module):
+    def __init__(self, cfg: ConditionedUNetConfig) -> None:
         super().__init__()
         self.noise_emb = FourierFeatures(cfg.cond_channels)
         self.noise_cond_emb = FourierFeatures(cfg.cond_channels)
@@ -21,7 +21,7 @@ class InnerModel(nn.Module):
             nn.Linear(cfg.cond_channels, cfg.cond_channels),
         )
         self.conv_in = Conv3x3(
-            (cfg.num_steps_conditioning + int(cfg.is_upsampler) + 1) * cfg.img_channels, 
+            (cfg.num_conditioning_steps + 1) * cfg.img_channels, 
             cfg.channels[0]
         )
 

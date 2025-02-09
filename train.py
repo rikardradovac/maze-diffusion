@@ -5,12 +5,13 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader
-from models import InnerModelConfig, DenoiserConfig, SigmaDistributionConfig, Denoiser
+from models import ConditionedUNetConfig, DenoiserConfig, SigmaDistributionConfig, Denoiser
 from data import SequenceMazeDataset, collate_maze_sequences
 import pandas as pd
 import argparse
 from torch.amp import autocast
 from torch.cuda.amp import GradScaler
+import wandb
 
 def get_lr_lambda(current_step: int, warmup_steps: int):
     if current_step < warmup_steps:
@@ -125,7 +126,7 @@ def parse_args():
     
     # Model configuration
     parser.add_argument('--img-channels', type=int, default=3, help='Number of image channels')
-    parser.add_argument('--num-steps-conditioning', type=int, default=4, help='Number of conditioning steps')
+    parser.add_argument('--num-conditioning-steps', type=int, default=4, help='Number of conditioning steps')
     parser.add_argument('--cond-channels', type=int, default=256, help='Number of conditioning channels')
     parser.add_argument('--model-depths', nargs='+', type=int, default=[2, 2, 2, 2], help='Model depths per layer')
     parser.add_argument('--model-channels', nargs='+', type=int, default=[64, 64, 64, 64], help='Model channels per layer')
@@ -149,6 +150,15 @@ def parse_args():
     parser.add_argument('--val-data', type=str, default="dataset/dit_data/test_dataset.parquet",
                       help='Path to validation data')
     parser.add_argument('--checkpoint-dir', type=str, default=".", help='Directory to save checkpoints')
+    
+    # Wandb configuration
+    parser.add_argument('--wandb-project', type=str, default='denoising-model', help='Weights & Biases project name')
+    parser.add_argument('--wandb-entity', type=str, default=None, help='Weights & Biases entity name')
+    parser.add_argument('--wandb-name', type=str, default=None, help='Weights & Biases run name')
+    
+    # Add checkpoint loading argument
+    parser.add_argument('--resume-from', type=str, default=None, 
+                       help='Path to checkpoint file to resume training from')
     
     args = parser.parse_args()
     
@@ -215,23 +225,21 @@ def main():
     )
 
     # Model configuration
-    inner_model_cfg = InnerModelConfig(
+    conditioned_unet_cfg = ConditionedUNetConfig(
         img_channels=args.img_channels,
-        num_steps_conditioning=args.num_steps_conditioning,
+        num_conditioning_steps=args.num_conditioning_steps,
         cond_channels=args.cond_channels,
         depths=args.model_depths,
         channels=args.model_channels,
         attn_depths=args.attn_depths,
         num_actions=args.num_actions,
-        is_upsampler=False
     )
 
     denoiser_cfg = DenoiserConfig(
-        inner_model=inner_model_cfg,
+        conditioned_unet=conditioned_unet_cfg,
         sigma_data=args.sigma_data,
         sigma_offset_noise=args.sigma_offset_noise,
         noise_previous_obs=args.noise_previous_obs,
-        upsampling_factor=None
     )
 
     sigma_distribution_cfg = SigmaDistributionConfig(
@@ -260,13 +268,46 @@ def main():
         lr_lambda=lambda step: get_lr_lambda(step, args.warmup_steps)
     )
 
+    # Initialize tracking variables
+    start_epoch = 0
     best_val_loss = float('inf')
     
+    # Load checkpoint if specified
+    if args.resume_from is not None and os.path.exists(args.resume_from):
+        if is_main_process:
+            print(f"Loading checkpoint from {args.resume_from}")
+        checkpoint = torch.load(args.resume_from, map_location=device)
+        
+        # Load model state
+        if is_distributed:
+            denoiser.module.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            denoiser.load_state_dict(checkpoint['model_state_dict'])
+            
+        # Load optimizer state
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        # Load training state
+        start_epoch = checkpoint['epoch'] + 1
+        best_val_loss = checkpoint.get('val_loss', float('inf'))
+        
+        if is_main_process:
+            print(f"Resuming from epoch {start_epoch} with best val loss: {best_val_loss:.4f}")
+    
     epoch_progress = tqdm(
-        range(args.num_epochs), 
+        range(start_epoch, args.num_epochs),  # Start from loaded epoch
         desc="Training Progress", 
         disable=not is_main_process
     )
+    
+    # Initialize wandb if main process
+    if is_main_process:
+        wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=args.wandb_name,
+            config=vars(args)
+        )
     
     try:
         for epoch in epoch_progress:
@@ -282,6 +323,15 @@ def main():
             val_loss = validate(denoiser, val_loader, device)
             
             if is_main_process:
+                # Log metrics to wandb
+                wandb.log({
+                    'epoch': epoch,
+                    'train_loss': train_loss,
+                    'val_loss': val_loss,
+                    'learning_rate': scheduler.get_last_lr()[0],
+                    'best_val_loss': best_val_loss
+                })
+                
                 epoch_progress.set_postfix({
                     'train_loss': f'{train_loss:.4f}',
                     'val_loss': f'{val_loss:.4f}',
@@ -290,6 +340,7 @@ def main():
                 
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
+                    checkpoint_path = f'checkpoint_best.pt'
                     torch.save({
                         'epoch': epoch,
                         'model_state_dict': denoiser.module.state_dict() if is_distributed 
@@ -297,7 +348,9 @@ def main():
                         'optimizer_state_dict': optimizer.state_dict(),
                         'train_loss': train_loss,
                         'val_loss': val_loss,
-                    }, f'checkpoint_best.pt')
+                    }, checkpoint_path)
+                    # Log best model checkpoint to wandb
+                    wandb.save(checkpoint_path)
     
     except KeyboardInterrupt:
         print("Training interrupted by user")
@@ -305,6 +358,8 @@ def main():
     finally:
         if is_distributed:
             torch.distributed.destroy_process_group()
+        if is_main_process:
+            wandb.finish()
 
 if __name__ == "__main__":
     main()

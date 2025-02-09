@@ -4,7 +4,7 @@ from torch import nn, Tensor
 from typing import Optional
 
 from .types.common import DenoiserConfig, SigmaDistributionConfig, Batch, Conditioners, LossAndLogs
-from .inner_model import InnerModel
+from .conditioned_unet import ConditionedUNet
 
 def add_dims(input: Tensor, n: int) -> Tensor:
     return input.reshape(input.shape + (1,) * (n - input.ndim))
@@ -13,12 +13,12 @@ class Denoiser(nn.Module):
     def __init__(self, cfg: DenoiserConfig) -> None:
         super().__init__()
         self.cfg = cfg
-        self.inner_model = InnerModel(cfg.inner_model)
+        self.conditioned_unet = ConditionedUNet(cfg.conditioned_unet)
         self.sample_sigma_training = None
 
     @property
     def device(self) -> torch.device:
-        return self.inner_model.noise_emb.weight.device
+        return self.conditioned_unet.noise_emb.weight.device
 
     def setup_training(self, cfg: SigmaDistributionConfig) -> None:
         assert self.sample_sigma_training is None
@@ -46,7 +46,7 @@ class Denoiser(nn.Module):
     def compute_model_output(self, noisy_next_obs: Tensor, obs: Tensor, cs: Conditioners) -> Tensor:
         rescaled_obs = obs / self.cfg.sigma_data
         rescaled_noise = noisy_next_obs * cs.c_in
-        return self.inner_model(rescaled_noise, cs.c_noise, cs.c_noise_cond, rescaled_obs)
+        return self.conditioned_unet(rescaled_noise, cs.c_noise, cs.c_noise_cond, rescaled_obs)
 
     @torch.no_grad()
     def wrap_model_output(self, noisy_next_obs: Tensor, model_output: Tensor, cs: Conditioners) -> Tensor:
@@ -56,31 +56,22 @@ class Denoiser(nn.Module):
 
     @torch.no_grad()
     def denoise(self, noisy_next_obs: Tensor, sigma: Tensor, sigma_cond: Optional[Tensor], 
-                obs: Tensor, act: Optional[Tensor]) -> Tensor:
+                obs: Tensor) -> Tensor:
         cs = self.compute_conditioners(sigma, sigma_cond)
-        model_output = self.compute_model_output(noisy_next_obs, obs, act, cs)
+        model_output = self.compute_model_output(noisy_next_obs, obs, cs)
         denoised = self.wrap_model_output(noisy_next_obs, model_output, cs)
         return denoised
 
     def forward(self, batch: Batch) -> LossAndLogs:
-        b, t, c, h, w = batch.obs.size()
-        H, W = (self.cfg.upsampling_factor * h, self.cfg.upsampling_factor * w) if self.is_upsampler else (h, w)
-        n = self.cfg.inner_model.num_steps_conditioning
+        b, t, c, H, W = batch.obs.size()
+        n = self.cfg.conditioned_unet.num_conditioning_steps
         seq_length = t - n
 
         # Get mask for valid sequences
         sequence_mask = batch.mask if batch.mask is not None else torch.ones(b, dtype=torch.bool, device=self.device)
 
-        if self.is_upsampler:
-            all_obs = torch.stack([x["full_res"] for x in batch.info]).to(self.device)
-            low_res = F.interpolate(
-                batch.obs.reshape(b * t, c, h, w), 
-                scale_factor=self.cfg.upsampling_factor, 
-                mode="bicubic"
-            ).reshape(b, t, c, H, W)
-            assert all_obs.shape == low_res.shape
-        else:
-            all_obs = batch.obs.clone()
+       
+        all_obs = batch.obs.clone()
 
         loss = 0
         total_valid = 0
@@ -104,10 +95,7 @@ class Denoiser(nn.Module):
             else:
                 sigma_cond = None
 
-            if self.is_upsampler:
-                valid_low_res = low_res[valid_mask]
-                prev_obs = torch.cat((prev_obs, valid_low_res[:, n + i]), dim=1)
-
+            
             sigma = self.sample_sigma_training(valid_size, self.device)
             noisy_obs = self.apply_noise(obs, sigma, self.cfg.sigma_offset_noise)
             
