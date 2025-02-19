@@ -5,7 +5,6 @@ import torch
 from typing import List
 from dataclasses import dataclass
 import matplotlib.pyplot as plt
-from IPython.display import clear_output
 from models import Denoiser, DenoiserConfig, ConditionedUNetConfig
 import numpy as np
 import onnxruntime
@@ -47,28 +46,28 @@ class BaseMazeGenerator:
 
         return generated_frames
 
-    @staticmethod
-    def play_movie(frames: list[torch.Tensor], interval: float = 0.1, cmap="gray"):
-        if not frames:
-            raise ValueError("The list of frames is empty!")
+    # @staticmethod
+    # def play_movie(frames: list[torch.Tensor], interval: float = 0.1, cmap="gray"):
+    #     if not frames:
+    #         raise ValueError("The list of frames is empty!")
 
-        for i, frame in enumerate(frames):
-            frame_data = frame[0].squeeze().cpu().numpy()
+    #     for i, frame in enumerate(frames):
+    #         frame_data = frame[0].squeeze().cpu().numpy()
 
-            if frame_data.ndim == 3 and frame_data.shape[0] == 3:
-                frame_data = frame_data.transpose(1, 2, 0)
+    #         if frame_data.ndim == 3 and frame_data.shape[0] == 3:
+    #             frame_data = frame_data.transpose(1, 2, 0)
 
-            frame_data = (frame_data - frame_data.min()) / (frame_data.max() - frame_data.min())
+    #         frame_data = (frame_data - frame_data.min()) / (frame_data.max() - frame_data.min())
 
-            clear_output(wait=True)
+    #         clear_output(wait=True)
 
-            plt.figure(figsize=(4, 4))
-            plt.imshow(frame_data, cmap=cmap if frame_data.ndim == 2 else None)
-            plt.title(f"Frame {i}")
-            plt.axis("off")
-            plt.show()
+    #         plt.figure(figsize=(4, 4))
+    #         plt.imshow(frame_data, cmap=cmap if frame_data.ndim == 2 else None)
+    #         plt.title(f"Frame {i}")
+    #         plt.axis("off")
+    #         plt.show()
 
-            plt.pause(interval)
+    #         plt.pause(interval)
 
     def _generate_frame(self, context_frames: torch.Tensor) -> torch.Tensor:
         """Generate a single frame (to be implemented by subclasses)."""

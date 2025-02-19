@@ -16,9 +16,11 @@ class ConditionedUNet(nn.Module):
         self.noise_cond_emb = FourierFeatures(cfg.cond_channels)
 
         self.cond_proj = nn.Sequential(
-            nn.Linear(cfg.cond_channels, cfg.cond_channels),
+            nn.Linear(cfg.cond_channels, cfg.cond_channels * 2),
             nn.SiLU(),
-            nn.Linear(cfg.cond_channels, cfg.cond_channels),
+            nn.Linear(cfg.cond_channels * 2, cfg.cond_channels * 2),
+            nn.SiLU(),
+            nn.Linear(cfg.cond_channels * 2, cfg.cond_channels),
         )
         self.conv_in = Conv3x3(
             (cfg.num_conditioning_steps + 1) * cfg.img_channels, 

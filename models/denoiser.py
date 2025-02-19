@@ -69,12 +69,16 @@ class Denoiser(nn.Module):
 
         # Get mask for valid sequences
         sequence_mask = batch.mask if batch.mask is not None else torch.ones(b, dtype=torch.bool, device=self.device)
-
-       
+        
+        # Get path mask if available
+        path_mask = batch.path_mask if batch.path_mask is not None else None
+        
         all_obs = batch.obs.clone()
 
         loss = 0
+        path_loss = 0
         total_valid = 0
+        total_path_pixels = 0
         
         for i in range(seq_length):
             # Only process valid sequences
@@ -85,6 +89,12 @@ class Denoiser(nn.Module):
             # Index only valid sequences
             valid_obs = all_obs[valid_mask]
             valid_size = valid_mask.sum()
+            
+            # Get path mask for current timestep if available
+            current_path_mask = None
+            if path_mask is not None:
+                current_path_mask = path_mask[valid_mask, n+i]  # Shape: [valid_size, H, W]
+                current_path_mask = current_path_mask.unsqueeze(1).expand(-1, c, -1, -1)  # Shape: [valid_size, c, H, W]
 
             prev_obs = valid_obs[:, i:i+n].reshape(valid_size, n * c, H, W)
             obs = valid_obs[:, n + i]
@@ -95,7 +105,6 @@ class Denoiser(nn.Module):
             else:
                 sigma_cond = None
 
-            
             sigma = self.sample_sigma_training(valid_size, self.device)
             noisy_obs = self.apply_noise(obs, sigma, self.cfg.sigma_offset_noise)
             
@@ -103,7 +112,27 @@ class Denoiser(nn.Module):
             model_output = self.compute_model_output(noisy_obs, prev_obs, cs)
             
             target = (obs - cs.c_skip * noisy_obs) / cs.c_out
-            loss += F.mse_loss(model_output, target) * valid_size
+            
+            # Compute regular MSE loss
+            mse_loss = F.mse_loss(model_output, target, reduction='none')
+            
+            if current_path_mask is not None:
+                # Compute path-weighted loss
+                path_pixels = current_path_mask.sum()
+                if path_pixels > 0:
+                    path_weighted_loss = (mse_loss * current_path_mask).sum() / path_pixels
+                    path_loss += path_weighted_loss * valid_size
+                    total_path_pixels += path_pixels * valid_size
+                
+                # For non-path pixels
+                non_path_mask = ~current_path_mask
+                non_path_pixels = non_path_mask.sum()
+                if non_path_pixels > 0:
+                    non_path_loss = (mse_loss * non_path_mask).sum() / non_path_pixels
+                    loss += non_path_loss * valid_size
+            else:
+                # If no path mask, use regular MSE loss
+                loss += mse_loss.mean() * valid_size
             
             denoised = self.wrap_model_output(noisy_obs, model_output, cs)
             valid_obs[:, n + i] = denoised
@@ -111,6 +140,17 @@ class Denoiser(nn.Module):
             
             total_valid += valid_size
 
-        # Normalize loss by total number of valid sequences processed
+        # Normalize losses
         loss = loss / total_valid if total_valid > 0 else loss
-        return loss, {"loss_denoising": loss.item()} 
+        if total_path_pixels > 0:
+            path_loss = path_loss / total_valid
+            # Increase path loss weight significantly for full path learning
+            total_loss = loss + 5.0 * path_loss 
+        else:
+            total_loss = loss
+
+        return total_loss, {
+            "loss_denoising": total_loss.item(),
+            "loss_path": path_loss.item() if total_path_pixels > 0 else 0.0,
+            "loss_regular": loss.item()
+        } 

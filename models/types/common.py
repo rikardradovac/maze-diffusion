@@ -35,6 +35,7 @@ class Batch:
     info: Optional[List[Dict[str, Any]]] = None
     segment_ids: Optional[List[SegmentId]] = None
     mask: Optional[torch.BoolTensor] = None
+    path_mask: Optional[torch.BoolTensor] = None  # Shape: [B, T, H, W] - True for path pixels
 
     def __post_init__(self):
         # If mask is not provided, assume all elements are valid
@@ -54,7 +55,8 @@ class Batch:
             trunc=self.trunc[indices] if self.trunc is not None else None,
             info=[self.info[i] for i in indices] if self.info is not None else None,
             segment_ids=[self.segment_ids[i] for i in indices] if self.segment_ids is not None else None,
-            mask=self.mask[indices] if self.mask is not None else None
+            mask=self.mask[indices] if self.mask is not None else None,
+            path_mask=self.path_mask[indices] if self.path_mask is not None else None
         )
 
     def filter_valid(self) -> 'Batch':
@@ -84,7 +86,8 @@ class Batch:
             mask=self.mask.pin_memory() if self.mask is not None else None,
             trunc=self.trunc.pin_memory() if self.trunc is not None else None,
             info=self.info,
-            segment_ids=self.segment_ids
+            segment_ids=self.segment_ids,
+            path_mask=self.path_mask.pin_memory() if self.path_mask is not None else None
         )
 
     def to(self, device: torch.device) -> 'Batch':
@@ -95,7 +98,8 @@ class Batch:
             mask=self.mask.to(device) if self.mask is not None else None,
             trunc=self.trunc.to(device) if self.trunc is not None else None,
             info=self.info,
-            segment_ids=self.segment_ids
+            segment_ids=self.segment_ids,
+            path_mask=self.path_mask.to(device) if self.path_mask is not None else None
         )
 
     @property
