@@ -193,7 +193,7 @@ def collate_maze_sequences(batch):
     return Batch(
         obs=maze_sequences,          # Shape: [B, T, C, H, W]      
         mask=masks,                  # Shape: [B, T]
-        path_mask=path_masks,        # Shape: [B, T, H, W]
+        path_mask=path_masks.float().clamp(0, 1),        # Shape: [B, T, H, W]
         info=None,
         segment_ids=None
     )
