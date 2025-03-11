@@ -15,7 +15,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080"],  # List of allowed origins (frontend domains)
+    allow_origins=["http://localhost:8080", "https://maze-magic-grid.vercel.app"],  # List of allowed origins (frontend domains)
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
