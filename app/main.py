@@ -1,5 +1,5 @@
 import numpy as np
-from fastapi import FastAPI, HTTPException, Security, Depends
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from PIL import Image
 import io
@@ -7,8 +7,7 @@ from utils.maze_gen import MazeGeneratorONNX
 import uvicorn
 import base64
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security.api_key import APIKeyHeader
-from starlette.status import HTTP_403_FORBIDDEN
+
 from utils.maze_inference import Maze
 from utils.solver_inference import Solver
 
@@ -36,26 +35,6 @@ class MazeRequest(BaseModel):
 
 generator = MazeGeneratorONNX(onnx_model_path="denoiser_best.onnx")
 
-
-API_KEY = "your-secret-api-key-here"  # In production, use an environment variable
-API_KEY_NAME = "X-API-Key"
-
-# Add the security scheme
-api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
-
-# Add this function to verify the API key
-async def get_api_key(api_key_header: str = Security(api_key_header)):
-    if api_key_header is None:
-        raise HTTPException(
-            status_code=HTTP_403_FORBIDDEN, detail="API Key header is missing"
-        )
-    if api_key_header != API_KEY:
-        raise HTTPException(
-            status_code=HTTP_403_FORBIDDEN, detail="Invalid API Key"
-        )
-    return api_key_header
-
-
 @app.get("/health")
 async def health():
     return {"message": "OK"}
@@ -63,7 +42,7 @@ async def health():
 @app.post("/generate_sequence/")
 async def generate_sequence(
     request: MazeRequest,
-    api_key: str = Depends(get_api_key)
+
 ):
     try:
         # Create maze from the request data
