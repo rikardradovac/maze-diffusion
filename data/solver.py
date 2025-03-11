@@ -20,6 +20,10 @@ class Solver:
     @staticmethod
     def find_start_end(maze):
         """Find the entrance and exit points of the maze."""
+        if maze.entrance is not None and maze.exit is not None:
+            return maze.entrance, maze.exit
+        
+        # Fallback to original logic if positions aren't stored
         height, width = maze.grid.shape
         start = end = None
         
@@ -43,6 +47,12 @@ class Solver:
                         start = (y, width-1)
                     else:
                         end = (y, width-1)
+        
+        # Store found positions
+        if maze.entrance is None:
+            maze.entrance = start
+        if maze.exit is None:
+            maze.exit = end
         
         return start, end
     

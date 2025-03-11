@@ -5,6 +5,7 @@ from torch.utils.data import Dataset
 from PIL import Image
 import torchvision.transforms as transforms
 from models.types.common import Batch
+import numpy as np
 
 
 
@@ -103,6 +104,26 @@ class SequenceMazeDataset(Dataset):
     def __len__(self):
         return len(self.sequences)
 
+    def _extract_path_mask(self, img_array):
+        """
+        Extract path mask from the maze image.
+        Red pixels (255, 0, 0) indicate the path
+        Green pixels (0, 255, 0) indicate the exit (when not part of the path)
+        """
+        # Convert to numpy array if it's a PIL Image
+        if isinstance(img_array, Image.Image):
+            img_array = np.array(img_array)
+        
+        # Path pixels are red (255, 0, 0) OR green (0, 255, 0)
+        # Note: Red path pixels take precedence over green exit pixels
+        path_mask = (
+            # Red path pixels
+            ((img_array[:, :, 0] == 255) & (img_array[:, :, 1] == 0) & (img_array[:, :, 2] == 0)) |
+            # Green exit pixels (only when not part of the red path)
+            ((img_array[:, :, 0] == 0) & (img_array[:, :, 1] == 255) & (img_array[:, :, 2] == 0))
+        )
+        return torch.from_numpy(path_mask)
+
     def __getitem__(self, idx):
         sequence = self.sequences[idx][:self.max_frames]
         sequence_length = len(sequence)
@@ -110,10 +131,17 @@ class SequenceMazeDataset(Dataset):
         # Load and transform all images in the sequence
         maze_frames = []
         actions = []
+        path_masks = []
         
         for _, row in sequence.iterrows():
-            # Load and transform current maze image
+            # Load current maze image
             current_maze = Image.open(row['frame']).convert('RGB')
+            
+            # Extract path mask before normalizing the image
+            path_mask = self._extract_path_mask(current_maze)
+            path_masks.append(path_mask)
+            
+            # Transform the image
             current_maze = self.transform(current_maze)
             maze_frames.append(current_maze)
             
@@ -131,10 +159,12 @@ class SequenceMazeDataset(Dataset):
         while len(maze_frames) < self.max_frames:
             maze_frames.append(torch.zeros((C, H, W)))
             actions.append(torch.zeros(4))
+            path_masks.append(torch.zeros((H, W), dtype=torch.bool))
         
-        # Stack all frames and actions
+        # Stack all frames, actions, and path masks
         maze_sequence = torch.stack(maze_frames)      # Shape: [max_frames, C, H, W]
         action_sequence = torch.stack(actions)        # Shape: [max_frames, 4]
+        path_mask_sequence = torch.stack(path_masks)  # Shape: [max_frames, H, W]
         
         # Create mask based on sequence_length
         mask = torch.zeros(self.max_frames, dtype=torch.bool)
@@ -144,7 +174,8 @@ class SequenceMazeDataset(Dataset):
             'maze_sequence': maze_sequence,           # Shape: [max_frames, C, H, W]
             'actions': action_sequence,               # Shape: [max_frames, 4]
             'sequence_length': sequence_length,       # Original sequence length before padding
-            'mask': mask                             # Shape: [max_frames]
+            'mask': mask,                            # Shape: [max_frames]
+            'path_mask': path_mask_sequence          # Shape: [max_frames, H, W]
         }
     
     def __repr__(self):
@@ -157,10 +188,12 @@ def collate_maze_sequences(batch):
     # Stack all sequences in batch
     maze_sequences = torch.stack([item['maze_sequence'] for item in batch])
     masks = torch.stack([item['mask'] for item in batch])
+    path_masks = torch.stack([item['path_mask'] for item in batch])
     
     return Batch(
         obs=maze_sequences,          # Shape: [B, T, C, H, W]      
         mask=masks,                  # Shape: [B, T]
+        path_mask=path_masks.float().clamp(0, 1),        # Shape: [B, T, H, W]
         info=None,
         segment_ids=None
     )

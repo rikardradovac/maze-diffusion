@@ -44,67 +44,142 @@ def get_device(args):
     return f"cuda:{args.local_rank}" if args.distributed else "cuda:0"
 
 def train_one_epoch(model, train_loader, optimizer, scheduler, device, 
-                   gradient_accumulation_steps, max_grad_norm, is_main_process, scaler):
+                   gradient_accumulation_steps, max_grad_norm, is_main_process, scaler,
+                   global_step, log_every_n_steps, val_loader):
     model.train()
     total_loss = 0
     num_batches = 0
     
     progress_bar = tqdm(train_loader, desc=f"Training", disable=not is_main_process)
     running_loss = 0.0
+    running_path_loss = 0.0  # Track path segmentation loss
     
     for step, batch in enumerate(progress_bar):
         batch = batch.to(device)
         
-        # Use autocast for mixed precision training
         with autocast(device_type="cuda"):
-            loss, _ = model(batch)
+            loss, logs = model(batch)  # Get both loss and logs
             loss = loss / gradient_accumulation_steps
 
-        # Scale loss and call backward
-        scaler.scale(loss).backward()
-        running_loss += loss.item() * gradient_accumulation_steps
+        try:
+            scaler.scale(loss).backward()
+            running_loss += loss.item() * gradient_accumulation_steps
+        except Exception as e:
+            print(f"Error during backward pass: {e}")
+            print(f"Loss: {loss}")
+            print(f"Logs: {logs}")
+            print(f"Batch: {batch}")
+            raise e
+        
+        # Extract and accumulate path loss if available
+        if 'loss_path' in logs:
+            running_path_loss += logs['loss_path'] * gradient_accumulation_steps
         
         if (step + 1) % gradient_accumulation_steps == 0:
-            # Unscale gradients and clip
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             
-            # Step optimizer and scaler
             scaler.step(optimizer)
-            scaler.update()
             optimizer.zero_grad()
             scheduler.step()
+            scaler.update()
             
-            progress_bar.set_postfix({
-                'loss': f'{running_loss/gradient_accumulation_steps:.4f}',
-                'lr': f'{scheduler.get_last_lr()[0]:.6f}'
-            })
+            global_step += 1
+            
+            # Log metrics every n steps
+            if is_main_process and global_step % log_every_n_steps == 0:
+                val_loss, val_logs = validate(model, val_loader, device)
+                
+                # Extract individual loss components if available
+                train_denoising_loss = logs.get('loss_denoising', 0.0)
+                train_path_loss = logs.get('loss_path', 0.0)
+                train_total_loss = logs.get('loss_total', running_loss/gradient_accumulation_steps)
+                
+                val_denoising_loss = val_logs.get('loss_denoising', 0.0)
+                val_path_loss = val_logs.get('loss_path', 0.0)
+                val_total_loss = val_loss
+                
+                metrics = {
+                    'step': global_step,
+                    'train_loss': train_total_loss,
+                    'train_denoising_loss': train_denoising_loss,
+                    'train_path_loss': train_path_loss,
+                    'val_loss': val_total_loss,
+                    'val_denoising_loss': val_denoising_loss,
+                    'val_path_loss': val_path_loss,
+                    'learning_rate': scheduler.get_last_lr()[0]
+                }
+                
+                wandb.log(metrics)
+                
+                progress_bar.set_postfix({
+                    'total': f'{train_total_loss:.4f}',
+                    'denoise': f'{train_denoising_loss:.4f}',
+                    'path': f'{train_path_loss:.4f}',
+                    'val': f'{val_total_loss:.4f}',
+                    'val_path': f'{val_path_loss:.4f}',
+                    'lr': f'{scheduler.get_last_lr()[0]:.6f}'
+                })
+            else:
+                # Extract individual loss components if available
+                train_denoising_loss = logs.get('loss_denoising', 0.0)
+                train_path_loss = logs.get('loss_path', 0.0)
+                train_total_loss = logs.get('loss_total', running_loss/gradient_accumulation_steps)
+                
+                progress_bar.set_postfix({
+                    'total': f'{train_total_loss:.4f}',
+                    'denoise': f'{train_denoising_loss:.4f}',
+                    'path': f'{train_path_loss:.4f}',
+                    'lr': f'{scheduler.get_last_lr()[0]:.6f}'
+                })
+                
             running_loss = 0.0
+            running_path_loss = 0.0  # Reset running path loss
             
         total_loss += loss.item() * gradient_accumulation_steps
         num_batches += 1
     
     progress_bar.close()
-    return total_loss / num_batches
+    return total_loss / num_batches, global_step
 
 def validate(model, val_loader, device):
     model.eval()
     total_loss = 0
     num_batches = 0
+    total_denoising_loss = 0
+    total_path_loss = 0
     
     progress_bar = tqdm(val_loader, desc=f"Validating", leave=False)
     
-    with torch.no_grad(), autocast(device_type="cuda"):  # Also use autocast for validation
+    with torch.no_grad(), autocast(device_type="cuda"):
         for batch in progress_bar:
             batch = batch.to(device)
-            loss, _ = model(batch)
+            loss, logs = model(batch)
+            
+            # Extract individual loss components
+            denoising_loss = logs.get('loss_denoising', 0.0)
+            path_loss = logs.get('loss_path', 0.0)
+            
             total_loss += loss.item()
+            total_denoising_loss += denoising_loss
+            total_path_loss += path_loss
+            
             num_batches += 1
             
-            progress_bar.set_postfix({'val_loss': f'{total_loss/num_batches:.4f}'})
+            progress_bar.set_postfix({
+                'val_total': f'{total_loss/num_batches:.4f}',
+                'val_denoise': f'{total_denoising_loss/num_batches:.4f}',
+                'val_path': f'{total_path_loss/num_batches:.4f}'
+            })
     
     progress_bar.close()
-    return total_loss / num_batches
+    
+    # Return both the total loss and a dictionary of component losses
+    return total_loss / num_batches, {
+        'loss_denoising': total_denoising_loss / num_batches,
+        'loss_path': total_path_loss / num_batches,
+        'loss_total': total_loss / num_batches
+    }
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train denoising model')
@@ -309,49 +384,33 @@ def main():
             config=vars(args)
         )
     
+    global_step = 0
+    log_every_n_steps = 100  
+    
     try:
         for epoch in epoch_progress:
             if is_distributed:
                 train_sampler.set_epoch(epoch)
             
-            train_loss = train_one_epoch(
+            train_loss, global_step = train_one_epoch(
                 denoiser, train_loader, optimizer, scheduler,
                 device, args.gradient_accumulation_steps, args.max_grad_norm, 
-                is_main_process, scaler
+                is_main_process, scaler, global_step, log_every_n_steps, val_loader
             )
             
-            val_loss = validate(denoiser, val_loader, device)
-            
+            # Save checkpoint at the end of each epoch
             if is_main_process:
-                # Log metrics to wandb
-                wandb.log({
+                checkpoint_path = f'checkpoint_epoch_{epoch}.pt'
+                torch.save({
                     'epoch': epoch,
+                    'global_step': global_step,
+                    'model_state_dict': denoiser.module.state_dict() if is_distributed 
+                                      else denoiser.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
                     'train_loss': train_loss,
-                    'val_loss': val_loss,
-                    'learning_rate': scheduler.get_last_lr()[0],
-                    'best_val_loss': best_val_loss
-                })
-                
-                epoch_progress.set_postfix({
-                    'train_loss': f'{train_loss:.4f}',
-                    'val_loss': f'{val_loss:.4f}',
-                    'best_val_loss': f'{best_val_loss:.4f}'
-                })
-                
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    checkpoint_path = f'checkpoint_best.pt'
-                    torch.save({
-                        'epoch': epoch,
-                        'model_state_dict': denoiser.module.state_dict() if is_distributed 
-                                          else denoiser.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'train_loss': train_loss,
-                        'val_loss': val_loss,
-                    }, checkpoint_path)
-                    # Log best model checkpoint to wandb
-                    wandb.save(checkpoint_path)
-    
+                }, checkpoint_path)
+                wandb.save(checkpoint_path)
+
     except KeyboardInterrupt:
         print("Training interrupted by user")
     

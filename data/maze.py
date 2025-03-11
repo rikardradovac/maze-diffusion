@@ -10,12 +10,14 @@ class Maze:
         self.width = width
         self.height = height
         self.grid = np.ones((height, width), dtype=np.uint8)
+        self.entrance = None
+        self.exit = None
 
 
     def generate(self, random_start=True):
         """Generate a new maze with given dimensions.
         
-        Parameters:
+        Parameters: 
             random_start (bool): If True, start carving from a random odd cell.
                                  Otherwise, start at (1, 1).
         """
@@ -56,6 +58,7 @@ class Maze:
                 x = randint(1, self.width-2)
                 if self.grid[1, x] == 0:
                     self.grid[0, x] = 0
+                    self.entrance = (0, x)
                     return
                     
         elif side == 'bottom':
@@ -63,6 +66,7 @@ class Maze:
                 x = randint(1, self.width-2)
                 if self.grid[self.height-2, x] == 0:
                     self.grid[self.height-1, x] = 0
+                    self.exit = (self.height-1, x)
                     return
                     
         elif side == 'left':
@@ -70,6 +74,7 @@ class Maze:
                 y = randint(1, self.height-2)
                 if self.grid[y, 1] == 0:
                     self.grid[y, 0] = 0
+                    self.entrance = (y, 0)
                     return
                     
         elif side == 'right':
@@ -77,6 +82,7 @@ class Maze:
                 y = randint(1, self.height-2)
                 if self.grid[y, self.width-2] == 0:
                     self.grid[y, self.width-1] = 0
+                    self.exit = (y, self.width-1)
                     return
     
     def _carve_path(self, x, y):
@@ -109,14 +115,26 @@ class Maze:
         return img_resized
 
     def save_solved_maze_image(self, path, filename='solved_maze.png', target_size=(64, 64)):
-        """Save the maze with the solution path highlighted in red."""
+        """Save the maze with the solution path highlighted in red and exit in green.
+        The current position (last point in path) will be shown in blue."""
         img_array = np.zeros((self.grid.shape[0], self.grid.shape[1], 3), dtype=np.uint8)
         img_array[self.grid == 1] = [0, 0, 0]      # walls = black
         img_array[self.grid == 0] = [255, 255, 255] # paths = white
         
+        # Mark exit in green (only if it's not part of the path)
+        if self.exit and (path is None or self.exit not in path):
+            img_array[self.exit[0], self.exit[1]] = [0, 255, 0]  # exit = green
+        
+        # Path takes priority over exit marking
         if path:
-            for y, x in path:
-                img_array[y, x] = [255, 0, 0]  # solution = red
+            # Color all points in the path except the last one red
+            for y, x in path[:-1]:
+                img_array[y, x] = [255, 0, 0]  # path = red
+            
+            # Color the current position (last point) blue
+            if len(path) > 0:
+                y, x = path[-1]
+                img_array[y, x] = [0, 0, 255]  # current = blue
         
         img = Image.fromarray(img_array)
         img_resized = img.resize(target_size, Image.NEAREST)
@@ -128,27 +146,37 @@ class Maze:
         for row in self.grid:
             print(''.join(['█' if cell == 1 else ' ' for cell in row]))
 
-    def create_maze_frame(self, highlight_cells=None, target_size=(32, 32), entrances=None):
-        """Create a maze frame with specified cells highlighted in red, returning the image buffer."""
-        # Create initial array
-        img_array = np.zeros((self.grid.shape[0], self.grid.shape[1], 3), dtype=np.uint8)
-        img_array[self.grid == 1] = [0, 0, 0]      # walls = black
-        img_array[self.grid == 0] = [255, 255, 255] # paths = white
+    def create_maze_frame(self, target_size=(64, 64), start_cell=None, end_cell=None, first_move_cell=None):
+        """Create two maze frames:
+        1. First frame shows start (red) and end (green)
+        2. Second frame shows start (red), end (green), and first move (blue)
         
-        # Make entrance positions white
-        if entrances:
-            for entrance in entrances:
-                y, x = entrance.y, entrance.x
-                img_array[y, x] = [255, 255, 255]  # entrances = white
+        Returns: List of two PIL Images
+        """
+        # Create base maze structure (repeated for both frames)
+        base_array = np.zeros((self.grid.shape[0], self.grid.shape[1], 3), dtype=np.uint8)
+        base_array[self.grid == 1] = [0, 0, 0]        # walls = black
+        base_array[self.grid == 0] = [255, 255, 255]  # paths = white
         
-        # Highlight specified cells in red
-        if highlight_cells:
-            for cell in highlight_cells:
-                y, x = cell['y'], cell['x']
-                img_array[y, x] = [255, 0, 0]  # highlight = red
+        # Create two identical arrays for our two frames
+        frame1 = base_array.copy()
+        frame2 = base_array.copy()
         
-        # Create and resize image
-        img = Image.fromarray(img_array)
-        img_resized = img.resize(target_size, Image.NEAREST)
+        # Add start (red) and end (green) points to both frames
+        if start_cell:
+            frame1[start_cell['y'], start_cell['x']] = [255, 0, 0]  # red
+            frame2[start_cell['y'], start_cell['x']] = [255, 0, 0]  # red
         
-        return img_resized
+        if end_cell:
+            frame1[end_cell['y'], end_cell['x']] = [0, 255, 0]  # green
+            frame2[end_cell['y'], end_cell['x']] = [0, 255, 0]  # green
+        
+        # Add first move (blue) only to second frame
+        if first_move_cell:
+            frame2[first_move_cell['y'], first_move_cell['x']] = [0, 0, 255]  # blue
+        
+        # Convert to PIL Images and resize
+        img1 = Image.fromarray(frame1).resize(target_size, Image.NEAREST)
+        img2 = Image.fromarray(frame2).resize(target_size, Image.NEAREST)
+        
+        return [img1, img2]
