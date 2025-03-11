@@ -61,8 +61,15 @@ def train_one_epoch(model, train_loader, optimizer, scheduler, device,
             loss, logs = model(batch)  # Get both loss and logs
             loss = loss / gradient_accumulation_steps
 
-        scaler.scale(loss).backward()
-        running_loss += loss.item() * gradient_accumulation_steps
+        try:
+            scaler.scale(loss).backward()
+            running_loss += loss.item() * gradient_accumulation_steps
+        except Exception as e:
+            print(f"Error during backward pass: {e}")
+            print(f"Loss: {loss}")
+            print(f"Logs: {logs}")
+            print(f"Batch: {batch}")
+            raise e
         
         # Extract and accumulate path loss if available
         if 'loss_path' in logs:

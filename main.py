@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 from starlette.status import HTTP_403_FORBIDDEN
 from data import Maze
+from data.solver import Solver
 
 app = FastAPI()
 
@@ -22,24 +23,19 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
+
 class ImageRequest(BaseModel):
     frame1: str  # base64 string
     frame2: str  # base64 string
 
-class EntrancePoint(BaseModel):
-    x: int
-    y: int
-
 class MazeRequest(BaseModel):
     initialGrid: list
     size: int
-    entrances: list[EntrancePoint]
-    path: list
-    startCell: dict
-    firstMoveCell: dict
-    entrancePositions: list[list[int]]
+    start: list[int]  # [y, x] coordinates of start position
+    firstStep: list[int]  # [y, x] coordinates of first step
+    end: list[int]  # [y, x] coordinates of end position
 
-generator = MazeGeneratorONNX(onnx_model_path="denoiser_denoise.onnx", device="cpu")
+generator = MazeGeneratorONNX(onnx_model_path="denoiser_best.onnx", device="cpu")
 
 
 API_KEY = "your-secret-api-key-here"  # In production, use an environment variable
@@ -60,6 +56,11 @@ async def get_api_key(api_key_header: str = Security(api_key_header)):
         )
     return api_key_header
 
+
+@app.get("/health")
+async def health():
+    return {"message": "OK"}
+
 @app.post("/generate_sequence/")
 async def generate_sequence(
     request: MazeRequest,
@@ -70,30 +71,74 @@ async def generate_sequence(
         maze = Maze(request.size, request.size)
         maze.grid = np.array(request.initialGrid)
         
-        # Create single maze image with path and entrances highlighted
-        maze_img = maze.create_maze_frame(
-            highlight_cells=[request.startCell, request.firstMoveCell],
-            target_size=(32, 32),
-            entrances=request.entrances
+        # Set entrance and exit for the solver to use
+        maze.entrance = (request.start[0], request.start[1])
+        maze.exit = (request.end[0], request.end[1])
+        
+        maze.grid[maze.entrance] = 0
+        maze.grid[maze.exit] = 0
+        
+        
+        # Use the solver to find the solution path
+        solution_path = Solver.solve(maze)
+        
+        
+
+        if solution_path:
+            num_frames = min(len(solution_path) + 2, 30) # not more than 30 frames
+        else:
+            # Fallback if no solution found
+            num_frames = 10
+            
+        # Log the path length and number of frames
+        print(f"Solution path length: {len(solution_path) if solution_path else 0}")
+        print(f"Generating {num_frames} frames for animation")
+        
+        # Convert positions to the format expected by create_maze_frame
+        first_move_cell = {"x": request.firstStep[1], "y": request.firstStep[0]}
+        start_cell = {"x": request.start[1], "y": request.start[0]}
+        end_cell = {"x": request.end[1], "y": request.end[0]}
+        
+        # Create maze frames with path and entrances highlighted
+        maze_images = maze.create_maze_frame(
+            target_size=(64, 64),
+            start_cell=start_cell,
+            end_cell=end_cell,
+            first_move_cell=first_move_cell
         )
         
-        # Convert PIL image to tensor and reshape to match expected dimensions
-        img_tensor = torch.tensor(np.array(maze_img), dtype=torch.float32).permute(2, 0, 1) / 255.0
-        initial_frames = img_tensor.unsqueeze(0).unsqueeze(0).repeat(1, 2, 1, 1, 1)  # Shape: [1, 2, 3, 32, 32]
+        # Convert both images to tensors and stack them correctly
+        img_tensors = [
+            (torch.tensor(np.array(img), dtype=torch.float32).permute(2, 0, 1) / 255.0 - 0.5) / 0.5
+            for img in maze_images
+        ]
+        initial_frames = torch.stack(img_tensors, dim=0).unsqueeze(0)  # Shape: [1, 2, 3, 64, 64]
         
-        # Generate sequence
-        generated_frames = generator.generate_sequence(initial_frames)
+        # Generate sequence with dynamic number of frames
+        generated_frames = generator.generate_sequence(initial_frames, num_frames=num_frames)
 
         # Convert generated frames to list of base64 images
         output_frames = []
-        for frame in generated_frames:
-            frame = frame.squeeze(0).permute(1, 2, 0).numpy()
-            frame = (frame * 255).clip(0, 255).astype(np.uint8)
+        # Process initial frames
+        for frame in initial_frames.squeeze(0):  # Remove batch dimension
+            frame = frame.permute(1, 2, 0).numpy()
+            frame = (frame * 0.5 + 0.5) * 255.0  # Denormalize: [-1,1] -> [0,1] -> [0,255]
+            frame = frame.clip(0, 255).astype(np.uint8)
             pil_image = Image.fromarray(frame)
-            base64_str = image_to_base64(pil_image)
-            output_frames.append(base64_str)
+            output_frames.append(image_to_base64(pil_image))
+            
+        # Process generated frames
+        for frame in generated_frames:
+            frame = frame.squeeze(0).squeeze(0).permute(1, 2, 0).numpy()  # Remove extra dimensions
+            frame = (frame * 0.5 + 0.5) * 255.0  # Denormalize: [-1,1] -> [0,1] -> [0,255]
+            frame = frame.clip(0, 255).astype(np.uint8)
+            pil_image = Image.fromarray(frame)
+            output_frames.append(image_to_base64(pil_image))
 
-        return {"frames": output_frames}
+        # Log total number of frames returned
+        print(f"Total frames returned: {len(output_frames)}")
+        
+        return {"frames": output_frames, "path_length": len(solution_path) if solution_path else 0, "num_frames": num_frames}
     except Exception as e:
         print(f"Error in generate_sequence: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -146,34 +146,37 @@ class Maze:
         for row in self.grid:
             print(''.join(['█' if cell == 1 else ' ' for cell in row]))
 
-    def create_maze_frame(self, highlight_cells=None, target_size=(32, 32), entrances=None):
-        """Create a maze frame with specified cells highlighted in red and exit in green.
+    def create_maze_frame(self, target_size=(64, 64), start_cell=None, end_cell=None, first_move_cell=None):
+        """Create two maze frames:
+        1. First frame shows start (red) and end (green)
+        2. Second frame shows start (red), end (green), and first move (blue)
         
-        The path up to the current position will be shown in red, while the current position
-        will be shown in blue. The exit remains green unless it's part of the highlighted path.
+        Returns: List of two PIL Images
         """
-        img_array = np.zeros((self.grid.shape[0], self.grid.shape[1], 3), dtype=np.uint8)
-        img_array[self.grid == 1] = [0, 0, 0]      # walls = black
-        img_array[self.grid == 0] = [255, 255, 255] # paths = white
+        # Create base maze structure (repeated for both frames)
+        base_array = np.zeros((self.grid.shape[0], self.grid.shape[1], 3), dtype=np.uint8)
+        base_array[self.grid == 1] = [0, 0, 0]        # walls = black
+        base_array[self.grid == 0] = [255, 255, 255]  # paths = white
         
-        # Mark exit in green (only if it's not being highlighted)
-        if self.exit and (highlight_cells is None or 
-                         not any(cell['y'] == self.exit[0] and cell['x'] == self.exit[1] 
-                                for cell in (highlight_cells or []))):
-            img_array[self.exit[0], self.exit[1]] = [0, 255, 0]  # exit = green
+        # Create two identical arrays for our two frames
+        frame1 = base_array.copy()
+        frame2 = base_array.copy()
         
-        # Highlight cells in red (path up to current) and blue (current position)
-        if highlight_cells:
-            # First color all cells except the last one in red (path)
-            for cell in highlight_cells[:-1]:
-                y, x = cell['y'], cell['x']
-                img_array[y, x] = [255, 0, 0]  # path = red
-            
-            # Color the last cell (current position) in blue
-            if highlight_cells:
-                current = highlight_cells[-1]
-                img_array[current['y'], current['x']] = [0, 0, 255]  # current = blue
+        # Add start (red) and end (green) points to both frames
+        if start_cell:
+            frame1[start_cell['y'], start_cell['x']] = [255, 0, 0]  # red
+            frame2[start_cell['y'], start_cell['x']] = [255, 0, 0]  # red
         
-        img = Image.fromarray(img_array)
-        img_resized = img.resize(target_size, Image.NEAREST)
-        return img_resized
+        if end_cell:
+            frame1[end_cell['y'], end_cell['x']] = [0, 255, 0]  # green
+            frame2[end_cell['y'], end_cell['x']] = [0, 255, 0]  # green
+        
+        # Add first move (blue) only to second frame
+        if first_move_cell:
+            frame2[first_move_cell['y'], first_move_cell['x']] = [0, 0, 255]  # blue
+        
+        # Convert to PIL Images and resize
+        img1 = Image.fromarray(frame1).resize(target_size, Image.NEAREST)
+        img2 = Image.fromarray(frame2).resize(target_size, Image.NEAREST)
+        
+        return [img1, img2]

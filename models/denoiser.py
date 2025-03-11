@@ -35,7 +35,7 @@ def dice_loss(logits, target, smooth=1.0):
     dice_coeff = (2.0 * intersection + smooth) / (union + smooth)
     return (1 - dice_coeff).sum()
 
-def combined_loss(logits, target, loss_fn, bce_weight=0.5, dice_weight=0.5):
+def combined_loss(logits, target, loss_fn, bce_weight=1, dice_weight=1):
     bce = loss_fn(logits, target)
     dice = dice_loss(logits, target)
     return bce_weight * bce + dice_weight * dice
@@ -174,7 +174,7 @@ class Denoiser(nn.Module):
 
 
         return total_loss, {
-            "loss_denoising": loss.item(),
-            "loss_path": path_loss.item() if total_path_pixels > 0 else 0.0,
-            "loss_total": total_loss.item()
+            "loss_denoising": loss.item() if isinstance(loss, torch.Tensor) else float(loss),
+            "loss_path": path_loss.item() if isinstance(path_loss, torch.Tensor) else float(path_loss),
+            "loss_total": total_loss.item() if isinstance(total_loss, torch.Tensor) else float(total_loss)
         } 
