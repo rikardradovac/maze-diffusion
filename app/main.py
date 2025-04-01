@@ -60,7 +60,7 @@ async def generate_sequence(
         solution_path = Solver.solve(maze)
         
         if solution_path:
-            num_frames = min(len(solution_path) + 2, 30) # not more than 30 frames
+            num_frames = min(len(solution_path) + 2, 100) # not more than 100 frames
         else:
             # Fallback if no solution found
             num_frames = 10
